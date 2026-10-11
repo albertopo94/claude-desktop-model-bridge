@@ -220,7 +220,10 @@ def read_cache(key: bytes) -> dict[str, dict]:
 # ------------------------------------------------------------------------------------ commands
 
 
-def cmd_identity() -> int:
+PLAN_FIELDS = ("subscriptionType", "rateLimitTier")
+
+
+def cmd_identity(args: argparse.Namespace) -> int:
     key = derive_key(read_keychain_password())
     entries = read_cache(key)
     if not entries:
@@ -231,6 +234,12 @@ def cmd_identity() -> int:
         print(f"{tag}: {label_key(name)}")
         for field in field_names(entry):
             print(f"  field: {field}")
+        if args.plan_fields:
+            # Plan metadata only: values the account owner can see in account settings.
+            for field in PLAN_FIELDS:
+                value = entry.get(field)
+                if isinstance(value, (str, int)) and len(str(value)) <= 32:
+                    print(f"  {field}: {value}")
         scopes = name.rsplit(":", 1)[-1] if ":" in name else ""
         if scopes.startswith("user:") or scopes.startswith("org:"):
             print(f"  scope: {scopes}")
@@ -321,7 +330,9 @@ def cmd_probe(args: argparse.Namespace) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("identity", help="print only which client issued the cached token")
+    ident = sub.add_parser("identity", help="print only which client issued the cached token")
+    ident.add_argument("--plan-fields", action="store_true",
+                       help="also print subscriptionType and rateLimitTier (plan metadata, not secrets)")
     probe = sub.add_parser("probe", help="send exactly one inference request")
     probe.add_argument("--model", default="claude-haiku-4-5-20251001")
     probe.add_argument("--identity", choices=sorted(IDENTITIES), default="desktop")
@@ -331,7 +342,7 @@ def main() -> int:
     if args.command == "probe":
         return cmd_probe(args)
     try:
-        return cmd_identity()
+        return cmd_identity(args)
     except ProbeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
