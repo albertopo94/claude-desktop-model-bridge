@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Investigation scratch: never commit captured traffic, decrypted payloads, or keys
+research/capture/
+research/raw/
+*.har
+*.pcap
+*.log
+
+# Local agent/editor state
+.atl/
+.codegraph/
+.engram/
