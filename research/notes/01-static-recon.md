@@ -107,20 +107,73 @@ The CDP probe was then judged unnecessary: its question (which origin authentica
 chat) is already answered statically by Finding B, and neither branch it could have produced
 would change the decision. One mutating action was spent establishing that, then stopped.
 
+## Finding G — CORRECTION: the bearer route is a first-class, supported path
+
+The section D/F reading above was wrong and is superseded by this finding. The provider
+abstraction is not third-party-only. The bundle contains a single auth-header builder used by the
+Anthropic-wire path:
+
+```js
+function n2t(e,t){
+  return e==="x-api-key" ? {"x-api-key":t}
+                         : {authorization:`Bearer ${t}`,
+                            ...hwe(t) && {"anthropic-beta":"oauth-2025-04-20"}}
+}
+```
+
+When the bearer matches the OAuth-token shape, the app **adds `anthropic-beta:
+oauth-2025-04-20`** and sends `Authorization: Bearer`. So subscription-OAuth inference over
+`/v1/messages` is a supported path that the app itself builds. `oauth-2025-04-20` appears 11 times
+in the bundle. The `"3p"` scope strings on `inferenceGateway*` keys mark which configuration
+plane may set them (MDM/bootstrap), not which credential types are accepted.
+
+Related corroborating evidence found in the same bundle: the first-party identity system string
+`"You are running inside the Claude desktop app (Code tab)."`, matching community reports that
+Anthropic validates the `system` field for OAuth-authenticated requests on non-Haiku models.
+
+Independent external confirmation: LiteLLM's own tutorial documents forwarding
+`Authorization: Bearer sk-ant-oat…` subscription tokens to `anthropic/` deployments and states it
+"adds the `anthropic-beta: oauth-2025-04-20` header Anthropic requires for OAuth".
+
+## Revision of the 403 explanation
+
+The feasibility test in section 2 sent a minimal request with `model`, `max_tokens` and one
+message. It did not send `anthropic-beta: oauth-2025-04-20`, and did not carry the OAuth-required
+first `system` identity block. Two candidate causes were therefore not controlled for:
+
+1. Missing OAuth beta header (the app itself always adds it).
+2. Missing/incorrect first `system` block for non-Haiku models — community reports show this
+   surfacing as generic 400s and as misleading 401/429 responses, not as a clean message.
+
+H3 (**account-level gate**) remains live and is **not** eliminated: Anthropic support replies on
+documented issues attribute the exact message `OAuth authentication is currently not allowed for
+this organization` to a lapsed subscription or to subscription access disabled for the
+organization server-side. Note that the earlier 403 said the message, while the header-omission
+failure mode reports a *different* message (`OAuth authentication is currently not supported`).
+So the observed message points more toward H3 than toward the header — but H4 was never tested
+and the two are not mutually exclusive.
+
+## Revised hypotheses
+
+- H1 — the `oauth:tokenCache` bearer is not the credential the chat uses: **still confirmed**
+  (Finding B). The chat rides the claude.ai web session.
+- H2 — no first-party inference surface exists: **RETRACTED.** It exists, the app builds it, and
+  it is bearer-OAuth over `/v1/messages` with the OAuth beta header.
+- H3 — account/organization gate on subscription OAuth: **live, and currently the best fit for the
+  exact message observed.**
+- H4 (new) — the test request was under-specified for OAuth auth (missing `anthropic-beta:
+oauth-2025-04-20`, missing the required first `system` identity block): **not tested.**
+
 ## Consequences for the GATE / NO-GO decision
 
-- H1 (**token is not the chat credential**): **confirmed.** Finding B.
-- H2 (**wrong surface**): **resolved as "no such surface for this account".** The bearer has no
-  first-party inference endpoint to aim at: the gateway route is gated to `3p` and its Anthropic-host
-  variant is `x-api-key`-only (Finding F). `a-api.anthropic.com` does not exist in the bundle.
-- H3 (**account-level gate**): **not excludable and now not worth excludng.** Any test that could
-  separate H3 from audience mismatch needs a paid or interactive action, not more reading.
+The gate is **not closed by architecture**. Before this correction the conclusion recorded here was
+that no first-party subscription inference endpoint exists; Finding G retracts that. What remains
+unproven is whether *this account* is authorized, and whether a correctly-shaped OAuth request
+(`anthropic-beta: oauth-2025-04-20` plus the required first `system` block) changes the outcome.
 
-What the evidence does **not** support: that a different header, model, path, or retry would have
-produced a 200. That was already the standing conclusion in the feasibility log and the static
-recon strengthens it.
 
-Decisive next observations, in cost order:
+
+Decisive next observations, in cost order (superseded by Finding G for item 2's framing):
 
 1. **Cache-key identity** (no traffic, no mutation): read the Keychain item to decrypt only the
    cache *key* and report which clientId issued the token. Distinguishes Desktop vs Claude Code

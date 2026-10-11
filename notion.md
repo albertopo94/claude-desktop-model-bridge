@@ -8,7 +8,7 @@ Claude Desktop Session Gateway — Investigación de viabilidad
 
 **Decisión actual:** **NO-GO para reutilizar directamente la credencial extraída de Claude Desktop en una petición independiente a /v1/messages.** La única prueba real terminó en HTTP 403 por autorización OAuth; la causa exacta todavía no está identificada.
 
-**Actualización (sección 11):** el análisis estático del bundle de la aplicación explicó el 403: el chat nativo no usa ese token y la app no tiene un endpoint de inferencia first-party autenticado por suscripción al que apuntar esa credencial. El NO-GO se mantiene; ahora con causa, no como misterio.
+**Actualización (secciones 11 y 12):** el análisis estático explicó parte del 403 y a la vez **revocó** la conclusión estructural: la app sí construye una ruta de inferencia first-party con portador OAuth sobre `/v1/messages`, con la cabecera `anthropic-beta: oauth-2025-04-20`. La prueba de la sección 2 no enviaba esa cabecera ni el bloque `system` de identidad que exigen los tokens OAuth. El NO-GO sigue vigente para lo probado, pero deja de ser una barrera arquitectural y pasa a ser una prueba pendiente con dos causas candidatas.
 
 ## 1. Objetivo de la investigación
 
@@ -293,12 +293,11 @@ ninguna de las dos ramas posibles cambiaba la decisión.
 ### 11.6 Veredicto de las hipótesis
 
 - **H1 — el token de `oauth:tokenCache` no es la credencial del chat: confirmada.**
-- **H2 — superficie equivocada: resuelta como "no hay superficie para esta cuenta".** El portador
-  no tiene un endpoint first-party de inferencia al que apuntar; la ruta de gateway es de terceros
-  y su variante Anthropic-host es solo `x-api-key`. La ruta `a-api.anthropic.com` que aparecía en
-  los logs no existe en el bundle: era un artefacto de truncado del parser.
-- **H3 — bloqueo a nivel de cuenta: no excluible, y ya no hace falta excluirla.** Distinguirla de
-  un simple error de audiencia exige una acción pagada o interactiva, no más lectura.
+- **H2 — superficie equivocada: RETRACTADA (sección 12).** La superficie existe y la app la
+  construye: portador OAuth sobre `/v1/messages` con `anthropic-beta: oauth-2025-04-20`.
+- **H3 — bloqueo a nivel de cuenta: sigue viva**, y es la que mejor explica el mensaje exacto
+  observado, porque Anthropic respondió ese mismo texto en incidencias por suscripción vencida o
+  acceso por suscripción deshabilitado para la organización del lado del servidor.
 
 Nada de esto apoya que otra cabecera, modelo, ruta o reintento hubiera dado 200.
 
@@ -317,3 +316,67 @@ dos, y ambas cambian qué se construye:
    créditos). Cambia el requisito "sin costo adicional", no el valor del puente.
 
 La decisión es del titular de la cuenta. Esta investigación no recomienda la opción 1.
+
+## 12. Corrección del veredicto — la ruta de portador OAuth sí existe — 11 de octubre de 2026
+
+La conclusión estructural de la sección 11 era incorrecta y queda revocada. La encontré buscando en
+fuentes públicas si el token `sk-ant-oat01-*` funcionaba para alguien, y confirmándolo contra el
+propio bundle de Claude Desktop.
+
+### 12.1 La app construye la cabecera que la prueba anterior no envió
+
+En `.vite/build/index.chunk-Cyt2WTko.js` existe un único constructor de cabeceras para el camino de
+Anthropic:
+
+```js
+function n2t(e,t){
+  return e==="x-api-key" ? {"x-api-key":t}
+                         : {authorization:`Bearer ${t}`,
+                            ...hwe(t) && {"anthropic-beta":"oauth-2025-04-20"}}
+}
+```
+
+Cuando el portador tiene la forma de token OAuth, la app agrega `anthropic-beta: oauth-2025-04-20`
+y manda `Authorization: Bearer`. La cadena `oauth-2025-04-20` aparece 11 veces en el bundle. Las
+cadenas `"3p"` que acompañan a las claves `inferenceGateway*` indican qué plano de configuración
+puede fijarlas (MDM/bootstrap), no qué tipos de credencial se aceptan: esa lectura fue mi error.
+
+Confirmación externa e independiente: la documentación de LiteLLM para enrutar suscripciones de
+Claude describe exactamente esto — reenvía `Authorization: Bearer sk-ant-oat…` a despliegues
+`anthropic/` y "agrega la cabecera `anthropic-beta: oauth-2025-04-20` que Anthropic requiere para
+OAuth". También existe un proyecto (teamclaude) que documenta que omitir esa cabecera produce
+fallos de autenticación con mensajes engañosos.
+
+### 12.2 Segunda exigencia no controlada: el bloque `system` de identidad
+
+En el mismo bundle aparece la cadena de identidad de primera parte
+`"You are running inside the Claude desktop app (Code tab)."`. Esto concuerda con reportes de la
+comunidad según los cuales la API valida el campo `system` cuando la autenticación es por token
+OAuth: para modelos distintos de Haiku exige que el primer bloque `system` sea la cadena de
+identidad exacta, y una forma incorrecta devuelve 400 genéricos o 429 que no son un límite de uso.
+
+### 12.3 Qué queda probado y qué no
+
+- **H1** (el token de `oauth:tokenCache` no es la credencial del chat): **sigue en pie.** El chat
+  usa la sesión web de claude.ai. Esto no cambia y no importa para el puente: al puente le da
+  igual cómo autentica el chat si existe una ruta de portador soportada.
+- **H2** (no existe superficie first-party de inferencia por suscripción): **retractada.**
+- **H3** (bloqueo a nivel de organización/cuenta): **viva, y es la hipótesis que mejor calza con el
+  mensaje exacto.** Anthropic respondió ese mismo texto en incidencias por suscripción vencida y
+  por acceso por suscripción deshabilitado del lado del servidor. Nota que el modo de falla por
+  cabecera faltante reporta un mensaje *distinto* (`OAuth authentication is currently not
+  supported`), así que el 403 observado apunta más a H3 que a H4 — pero H4 nunca se probó y ambas
+  no se excluyen.
+- **H4** (la prueba de la sección 2 estaba subespecificada para autenticación OAuth): **sin probar.**
+
+### 12.4 Efecto sobre la decisión
+
+El bloque dejaría de ser arquitectural y pasa a ser empírico: hace falta una petición bien formada
+para separar H3 de H4. La regla de la sección 8 ("no repetir llamadas para sondear el servidor")
+se escribió cuando reintentar era a ciegas; con `anthropic-beta` y el bloque `system` correctos ya
+no lo es, pero sigue siendo una petición con la credencial de la cuenta y por lo tanto requiere
+decisión explícita del titular. El orden propuesto, de menor a mayor costo, está en
+`research/notes/01-static-recon.md`.
+
+Mientras tanto el producto no queda bloqueado: la arquitectura del puente es la de
+`agy-model-bridge` con la fuente reemplazada, y esa parte no depende del resultado de esta prueba.
