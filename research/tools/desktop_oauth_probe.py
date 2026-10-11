@@ -38,6 +38,7 @@ import ctypes
 import ctypes.util
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -152,14 +153,28 @@ def decrypt_blob(blob_b64: str, key: bytes) -> bytes:
 # -------------------------------------------------------------------------------- redaction
 
 
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
 def label_key(name: str) -> str:
-    """Echo a cache key with the issuing client named and the account uuid masked."""
+    """Echo a cache key naming the issuing client; mask every other uuid.
+
+    Cache keys look like `acct:<accountUuid>|<clientId>:<orgUuid>:<apiHost>:<scope>`. Only the
+    client id is a public bundle identifier; account and organization uuids are masked.
+    """
+    placeholders: dict[str, str] = {}
     for cid, label in PUBLIC_CLIENTS.items():
         if cid in name:
-            name = name.replace(cid, f"<clientId:{label}>")
+            token = f"__client{len(placeholders)}__"
+            placeholders[token] = f"<clientId:{label}>"
+            name = name.replace(cid, token)
+    name = UUID_RE.sub("<redacted>", name)
+    for token, label in placeholders.items():
+        name = name.replace(token, label)
     if name.startswith("acct:"):
         _, _, rest = name.partition("|")
-        return f"acct:<redacted>|{label_key(rest)}" if rest else "acct:<redacted>"
+        return f"acct:<redacted>|{rest}" if rest else "acct:<redacted>"
     return name
 
 
