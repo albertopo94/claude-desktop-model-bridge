@@ -8,6 +8,8 @@ Claude Desktop Session Gateway — Investigación de viabilidad
 
 **Decisión actual:** **NO-GO para reutilizar directamente la credencial extraída de Claude Desktop en una petición independiente a /v1/messages.** La única prueba real terminó en HTTP 403 por autorización OAuth; la causa exacta todavía no está identificada.
 
+**Actualización (sección 11):** el análisis estático del bundle de la aplicación explicó el 403: el chat nativo no usa ese token y la app no tiene un endpoint de inferencia first-party autenticado por suscripción al que apuntar esa credencial. El NO-GO se mantiene; ahora con causa, no como misterio.
+
 ## 1. Objetivo de la investigación
 
 Determinar si una aplicación local para macOS podría aprovechar la sesión que mantiene Claude Desktop y ofrecer una pasarela local de inferencia para otros agentes.
@@ -222,3 +224,96 @@ La incidencia #68370 incluye una teoría del propio usuario sobre una suscripci�
 - El supuesto de que podemos seguir investigando permite continuar el estudio, pero no convierte en autorizada o funcional una petición que el servidor rechazó.
 
 **Estado:** reutilización directa de la sesión Desktop → **NO-GO provisional, bloqueada por el 403 del servidor**. Integración mediante API oficial con credenciales/facturación propias → vía documentada, pero no equivalente al objetivo original. MCP local → alternativa para que Claude utilice herramientas, no una pasarela de inferencia para otros agentes.
+
+## 11. Verificación estática del bundle de Claude Desktop — 11 de octubre de 2026
+
+Análisis de `app.asar` de Claude Desktop 2.31226.1 (sha256 `08446bcf…b6bc5b`) sobre una copia de
+trabajo, sin tocar la aplicación. Herramienta: CLI de REA para el grafo de módulos y los límites
+Electron, más lecturas puntuales del bundle del proceso principal
+(`.vite/build/index.chunk-Cyt2WTko.js`, 6,88 MB). La evidencia es de identificadores: nombres de
+cliente OAuth, hosts, rutas, nombres de cabecera y de variables de entorno. No se leyó ni se
+registró ningún token, valor de cabecera ni contenido de mensajes. Detalle completo:
+`research/notes/01-static-recon.md`.
+
+### 11.1 Cuatro clientes OAuth comparten el mismo apiHost
+
+Todos resuelven `api.anthropic.com` en producción. Los identificadores de cliente son públicos
+(están en el bundle que Anthropic distribuye).
+
+| Configuración | clientId de producción | scope |
+| --- | --- | --- |
+| `DESKTOP_OAUTH_CONFIGS` | `89355bc3-cbfd-4382-905b-976645cad410` | `user:inference` |
+| `CLAUDE_CODE_OAUTH_CONFIGS` | `9d1c250a-e61b-44d9-88ed-5944d1962f5e` | `user:inference user:file_upload user:profile` |
+| `COWORK_OAUTH_CONFIGS` | `a473d7bb-17ac-43a7-abc0-a1343d7c2805` | el anterior + `user:sessions:claude_code` |
+| `CLAUDE_AI_IMPORT_DEFAULTS` | `3b6a227a-0bc2-4c10-91b0-72226730d013` | (origen de la app web) |
+
+La entrada observada en `config.json` traía scope `user:inference` sin `user:profile`, que coincide
+exactamente con `DESKTOP_OAUTH_CONFIGS`. La clave del caché tiene la forma
+`[acct:<accountUuid>|]<clientId>:<apiHost>:<scope>`, o sea que el propio nombre de la clave nombra
+al cliente emisor. No se ejecutó esa lectura: requiere `security … -w`, y se prefirió no tocar el
+llavero.
+
+### 11.2 El chat no usa ese token
+
+La ventana principal carga `https://claude.ai`. El hook `webRequest.onBeforeSendHeaders` del
+proceso principal inyecta cabeceras de identificación de cliente
+(`anthropic-client-os-platform`, `anthropic-client-os-version`, `anthropic-desktop-topbar: 1` y la
+familia `anthropic-client-app`) y **elimina** `x-authorization`. No inyecta `Authorization: Bearer`
+en las peticiones de la conversación. La autenticación del chat es la sesión web.
+
+### 11.3 Para qué usa la app ese portador
+
+Consumos observados del portador contra `api.anthropic.com`: `/api/oauth/profile`, el mint de un
+token de telemetría, la lista de bloqueo de previews, el emparejamiento MCP de la extensión de
+Chrome (`user:inference user:office`) y la exportación OTLP con `authMode:
+"inference-credential"`. Ninguno es la inferencia de la conversación.
+
+### 11.4 La superficie de gateway existe, pero está habilitada solo para terceros
+
+La abstracción de proveedor aparece en el bundle con claves
+`inferenceProvider`, `inferenceGatewayBaseUrl`, `inferenceGatewayApiKey`,
+`inferenceGatewayHeaders`, `inferenceGatewayOidc`, `inferenceGatewayAuthScheme`. Todas bajo
+`support.enabled.scopes: ["3p"]`. El validador avisa cuando un `baseUrl` en un host
+`anthropic.com` se combina con un esquema que no sea `x-api-key`, o sea que la única variante
+Anthropic-host admitida en esa superficie es **`x-api-key`**: facturación de API, no suscripción.
+
+No hay en la configuración de la app ningún endpoint de inferencia first-party autenticado por
+suscripción. La config local de esta instalación no trae ninguna clave `bootstrap`, `gateway`,
+`inference*` ni `deployment`, coherente con que esa configuración nunca fue entregada a una cuenta
+de consumo.
+
+### 11.5 Sonda de runtime: intentada y descartada
+
+Se intentó `--remote-debugging-port=9222` lanzando el binario directamente: no respondió en la
+ventana de prueba (la aplicación estaba cerrada antes, así que no es una entrega a una instancia
+existente; el depurador remoto está deshabilitado en este build). Se descartó insistir: la pregunta
+que esa sonda respondía —qué origen autentica el chat nativo— ya estaba respondida en 11.2, y
+ninguna de las dos ramas posibles cambiaba la decisión.
+
+### 11.6 Veredicto de las hipótesis
+
+- **H1 — el token de `oauth:tokenCache` no es la credencial del chat: confirmada.**
+- **H2 — superficie equivocada: resuelta como "no hay superficie para esta cuenta".** El portador
+  no tiene un endpoint first-party de inferencia al que apuntar; la ruta de gateway es de terceros
+  y su variante Anthropic-host es solo `x-api-key`. La ruta `a-api.anthropic.com` que aparecía en
+  los logs no existe en el bundle: era un artefacto de truncado del parser.
+- **H3 — bloqueo a nivel de cuenta: no excluible, y ya no hace falta excluirla.** Distinguirla de
+  un simple error de audiencia exige una acción pagada o interactiva, no más lectura.
+
+Nada de esto apoya que otra cabecera, modelo, ruta o reintento hubiera dado 200.
+
+### 11.7 Efecto sobre el producto
+
+El requisito no negociable declarado —reutilizar la suscripción de Claude Desktop sin facturación
+de API— queda sin vía conocida que no dependa de suplantar una sesión web de claude.ai. Eso es una
+decisión de riesgo, no un resultado técnico pendiente. Las opciones que quedan sobre la mesa son
+dos, y ambas cambian qué se construye:
+
+1. **Aceptar la fragilidad**: un gateway que suplante la sesión web de claude.ai. Requiere
+   observación de runtime, réplica de huella del cliente, y se rompe con cada actualización de la
+   app, con riesgo de suspensión de la cuenta.
+2. **Mover el objetivo**: construir el puente sobre una credencial con audiencia correcta para
+   inferencia (por ejemplo la vía de suscripción del producto de terminal, o la API con sus
+   créditos). Cambia el requisito "sin costo adicional", no el valor del puente.
+
+La decisión es del titular de la cuenta. Esta investigación no recomienda la opción 1.

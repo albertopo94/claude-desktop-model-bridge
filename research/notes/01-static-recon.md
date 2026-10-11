@@ -78,13 +78,47 @@ This matters for product shape: Anthropic's own supported consumption path for a
 base URL is "hand it to an agent runtime as env vars". That is the same interface the bridge needs
 to expose, and it is a legitimate reference design rather than a protocol to imitate.
 
+## Finding F — the gateway config surface is third-party only
+
+The inference provider schema gates the whole gateway concept to third-party deployments:
+
+- `inferenceGatewayBaseUrl` → `provider: "gateway"`, `support.enabled.scopes: ["3p"]`, available
+  from build 1.2581.0, with `originPinned` policy and a fail-closed stand-in host.
+- Sibling keys under the same 3p gate: `inferenceGatewayApiKey`, `inferenceGatewayHeaders`,
+  `inferenceGatewayOidc` / `OidcAuthFlow`, `inferenceGatewayAuthScheme` (`bearer` or `x-api-key`),
+  `inferenceProvider` (values include `mantle`, `vertex`, `bedrock`, `gateway`).
+- The validator warns when an Anthropic-host gateway `baseUrl` is paired with a non-`x-api-key`
+  scheme — i.e. the only supported Anthropic-host route in this surface is **`x-api-key`**,
+  which is API billing, not subscription reuse.
+
+There is no first-party, subscription-authenticated inference endpoint in the app's configuration
+surface. The gateway origin observed in `gatewayOrigin()` exists to serve 3p/enterprise
+configuration that was never delivered to this installation, which is consistent with the empty
+local bootstrap config (`config.json` carries no bootstrap, gateway, provider or deployment key).
+
+## Runtime probe attempted and abandoned (CDP)
+
+Launching the binary directly with `--remote-debugging-port=9222` bound nothing: `curl
+127.0.0.1:9222/json/version` returned no response within the probe window. The app was quit
+beforehand, so this is not single-instance hand-off; remote debugging is disabled in this build.
+No further runtime observation is available by that route.
+
+The CDP probe was then judged unnecessary: its question (which origin authenticates the native
+chat) is already answered statically by Finding B, and neither branch it could have produced
+would change the decision. One mutating action was spent establishing that, then stopped.
+
 ## Consequences for the GATE / NO-GO decision
 
-- H1 (**token is not the chat credential**): **confirmed statically.**
-- H2 (**wrong surface**): **strengthened, unresolved.** First-party inference targets a runtime
-  gateway origin, not the public Messages endpoint. Never probed.
-- H3 (**account-level gate**): **weakened but not excluded.** The identical message in Claude Code
-  issues keeps an account-level explanation live; audience scope is the cheaper hypothesis.
+- H1 (**token is not the chat credential**): **confirmed.** Finding B.
+- H2 (**wrong surface**): **resolved as "no such surface for this account".** The bearer has no
+  first-party inference endpoint to aim at: the gateway route is gated to `3p` and its Anthropic-host
+  variant is `x-api-key`-only (Finding F). `a-api.anthropic.com` does not exist in the bundle.
+- H3 (**account-level gate**): **not excludable and now not worth excludng.** Any test that could
+  separate H3 from audience mismatch needs a paid or interactive action, not more reading.
+
+What the evidence does **not** support: that a different header, model, path, or retry would have
+produced a 200. That was already the standing conclusion in the feasibility log and the static
+recon strengthens it.
 
 Decisive next observations, in cost order:
 
