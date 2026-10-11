@@ -30,21 +30,32 @@ Hypotheses to separate:
 
 ## Tasks
 
-- [ ] T1 — Static map of the bundle with REA (CLI only, no MCP setup, no app mutation).
+- [x] T1 — Static map of the bundle with REA (CLI only, no MCP setup, no app mutation).
       Output: entry points, module graph, network-layer locations, IPC channels. Redacted notes
       only in `research/notes/`.
-- [ ] T2 — Locate the inference call site: which host constant, which path, which headers, and
+- [x] T2 — Locate the inference call site: which host constant, which path, which headers, and
       whether the decrypted `oauth:tokenCache` token is read on that path. Settles H1 vs H2/H3
       statically.
-- [ ] T3 — Locate credential lifecycle: where `oauth:tokenCache`/`tokenCacheV2` are written and
+- [x] T3 — Locate credential lifecycle: where `oauth:tokenCache`/`tokenCacheV2` are written and
       read, refresh behaviour, sign-out/revocation handling.
-- [ ] T4 — Runtime confirmation (P2, CDP launch flag) of the single observed chat request:
-      host, path, method, status, header names, body shape, SSE event names. Only if T1/T2 leave
-      ambiguity and only under the reversibility contract.
-- [ ] T5 — Verdict and GO/NO-GO update in `notion.md`, with the evidence artifact and the
+- [x] T4 — Runtime confirmation. ATTEMPTED AND ABANDONED: `--remote-debugging-port=9222` bound
+      nothing (remote debugging disabled in this build). Question already answered statically by
+      Finding B; neither branch would have changed the decision. App state verified unchanged.
+- [x] T5 — Verdict and GO/NO-GO update in `notion.md`, with the evidence artifact and the
       post-check hashes proving the app state is unchanged.
 
 ## Evidence budget
 
 Static analysis output stays in `research/raw/` (gitignored, may contain bundle strings).
 Only redacted, shape-level findings are committed to `research/notes/`.
+
+## Outcome (2026-10-11)
+
+T1–T3 resolved statically; T4 abandoned with reason; T5 written into `notion.md` §11.
+
+- H1 confirmed: the native chat authenticates with the claude.ai web session, not `oauth:tokenCache`.
+- H2 resolved as "no surface for this account": the gateway config keys are gated to `scopes: ["3p"]`
+  and the Anthropic-host variant is `x-api-key` only.
+- H3 not excludable and no longer decisive.
+- Post-check passed: `config.json`, `Preferences`, `Local State` sha256 identical to baseline;
+  Keychain item attributes unchanged; Claude Desktop received no configuration writes.
