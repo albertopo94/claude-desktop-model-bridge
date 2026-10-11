@@ -380,3 +380,33 @@ decisión explícita del titular. El orden propuesto, de menor a mayor costo, es
 
 Mientras tanto el producto no queda bloqueado: la arquitectura del puente es la de
 `agy-model-bridge` con la fuente reemplazada, y esa parte no depende del resultado de esta prueba.
+
+## 13. Prueba bien formada ejecutada — 11 de octubre de 2026
+
+Se ejecutó exactamente una petición, con `anthropic-beta: oauth-2025-04-20` y un bloque `system` de
+identidad de primera parte tomado del bundle, contra `POST /v1/messages` con el token en caché de
+Claude Desktop (formato: 108 caracteres, prefijo `sk-ant-oat`, cliente emisor
+`DESKTOP_OAUTH_CONFIGS`, scope `user:inference`). Resultado: **HTTP 403 `permission_error` —
+`OAuth authentication is currently not allowed for this organization`**, `request_id`
+`req_011Cfw6mH8FgYDusHWmQEtQu`. Sin reintentos, sin escrituras.
+
+**H4 descartada**: la cabecera beta y el bloque `system` no eran la causa. **H3 confirmada**: el
+rechazo es una política de autorización a nivel de organización, anterior a la validación del cuerpo
+de la petición; los modos de falla por forma incorrecta del cuerpo reportan 400 o 429, nunca este
+mensaje. La credencial, su scope y su audiencia son correctos; la organización no está autorizada a
+consumirlos desde un proceso independiente.
+
+Detalle de la prueba 11: la identidad del token quedó probada (no solo inferida) leyendo la *clave*
+del caché, sin exponer el valor. Ver `research/notes/02-token-identity.md`.
+
+### Efecto sobre la decisión
+
+El NO-GO para reutilizar la suscripción de Claude Desktop queda confirmado con causa establecida y
+fuera del alcance de la ingeniería local. Vías que quedan del lado del titular de la cuenta: pedir
+a soporte de Anthropic que habilite OAuth por suscripción para la organización (los issues citados
+tienen respuestas de personal de Anthropic describiéndolo como ajuste del servidor que la
+configuración local no puede anular), o aceptar una credencial cuya audiencia sí esté autorizada,
+lo que implica facturación de API.
+
+La pasarela en sí no depende de este resultado: es agnóstica de la fuente y reutilizable desde
+`agy-model-bridge`.
