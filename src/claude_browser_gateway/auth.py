@@ -69,14 +69,12 @@ class AuthManager:
         self._state_path().write_text(json.dumps(self.state.__dict__, indent=2))
 
     async def start(self) -> None:
-        """Start the browser with the persisted session state, if present."""
-        self.playwright = await async_playwright().start()
+        """Start the browser with the persisted session state, if present.
 
-        storage_state = (
-            str(self.settings.storage_state_path)
-            if self.settings.storage_state_path.is_file()
-            else None
-        )
+        For persistent contexts, storage state is managed automatically via the
+        user_data_dir. We don't pass storage_state to launch_persistent_context.
+        """
+        self.playwright = await async_playwright().start()
 
         user_data_dir = self.settings.user_data_dir or (
             self.settings.session_dir / "browser-profile"
@@ -84,13 +82,11 @@ class AuthManager:
         self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(user_data_dir),
             headless=self.settings.headless,
-            storage_state=storage_state,
         )
 
     async def stop(self) -> None:
-        """Save session state and shut down the browser."""
+        """Shut down the browser. Storage state is auto-persisted by persistent context."""
         if self.context:
-            await self.context.storage_state(path=str(self.settings.storage_state_path))
             await self.context.close()
             self.context = None
         if self.playwright:
@@ -117,33 +113,39 @@ class AuthManager:
             await page.close()
 
     async def interactive_login(self) -> bool:
-        """Open a headed browser for the user to sign in manually. Returns True on success."""
+        """Open a headed browser for the user to sign in manually. Returns True on success.
+
+        Waits for the chat composer to appear, which only happens after a successful login.
+        """
         if not self.context:
             await self.start()
         assert self.context
         page = await self.context.new_page()
         await page.goto(self.settings.claude_url)
         print("Please sign in to claude.ai in the opened browser window.")
-        print("Waiting for authentication to complete...")
+        print("Use your Google account / email that has access to claude.ai.")
+        print("Waiting for authentication to complete (waiting for chat composer to appear)...")
 
-        # Poll until the page indicates authentication
+        # Poll until the chat composer appears (only visible after successful login)
         deadline = time.time() + 600  # 10 minute timeout
         authenticated = False
         while time.time() < deadline:
-            await page.wait_for_timeout(2000)
-            if "/login" not in page.url and await page.locator(SELECTORS["login_button"]).count() == 0:
+            try:
+                await page.wait_for_selector(SELECTORS["composer"], timeout=2000)
                 authenticated = True
                 break
+            except Exception:
+                await page.wait_for_timeout(1000)
+                continue
         if not authenticated:
             print("Login timed out — please try again.")
             await page.close()
             return False
 
-        await self.context.storage_state(path=str(self.settings.storage_state_path))
         self.state.authenticated = True
         self.state.claude_url = page.url
         self._save_state()
-        print("Authentication complete! Session saved.")
+        print("Authentication complete! Session saved (persisted automatically).")
         await page.close()
         return True
 
