@@ -1,48 +1,41 @@
-# Claude Desktop Model Bridge
+# Claude Browser Gateway
 
-Research project to evaluate whether a local inference gateway can reuse the session that
-Claude Desktop keeps on macOS, and expose it as a standard model endpoint for other coding
-agents.
+Source-agnostic gateway architecture, ported from the verified design of
+`agy-model-bridge`. The Claude subscription source is implemented as a
+placeholder (`TokenProvider` protocol matching `bridge/auth.py`) and stays
+dark until either (a) the organization-level authorization is lifted, or
+(b) a different first-party Claude subscription credential with the correct
+audience is provided.
 
-**Status: research / feasibility.** No implementation is authorized yet. See
-[`notion.md`](notion.md) for the evidence log and the current decision.
+No attempt is made to observe, replay, or extract the Claude Desktop session
+without explicit user authorization. The captured `claude-desktop-model-bridge`
+work (notebook `research/notes/`) shows exactly what was verified, what was
+retracted, what the correct request shape looks like, and why free tier has no
+subscription OAuth entitlement.
 
-## Current decision
+## Status
 
-**NO-GO** for the direct method tested so far: the OAuth credential extracted from Claude
-Desktop's local config was decrypted successfully and rejected by `api.anthropic.com` with
-HTTP 403 `permission_error` — `OAuth authentication is currently not allowed for this
-organization`. The root cause is unresolved.
+- **Source (Desktop free-tier)**: blocked at organization level (HTTP 403).
+- **Bridge (source-agnostic)**: scaffolded (`src/claude_browser_gateway/`),
+  with session-manager (Playwright) and FastAPI layer.
+- **Extraction tool (`desktop_oauth_probe.py`)**: verified with fabricated
+  payloads, protects secrets, runs with `--confirm ONE_REQUEST` gate.
+- **Version gate**: `version` CLI prints the supported Claude Desktop
+  version tied to the verified bundle (`2.31226.1`, build 2026-10-09).
 
-Proven: local extraction and decryption.
-Not proven: independent inference, streaming, tool calling, session renewal.
+## Usage (once a source is authorized)
 
-## Relationship to agy-model-bridge
+```bash
+# Fresh interactive login to claude.ai (headed browser; saves session)
+claude-browser-gateway login
 
-This project follows the same shape as
-[agy-model-bridge](https://github.com/albertopo94/agy-model-bridge), which bridges the Google
-Cloud Code Assist backend used by Google Antigravity to standard client protocols. The
-intended source here is Anthropic via Claude Desktop instead.
+# Start the gateway
+claude-browser-gateway start
 
-The two sources are not symmetric:
+# Probe one request (only after identity is confirmed)
+python3 research/tools/desktop_oauth_probe.py probe --confirm ONE_REQUEST
+```
 
-| | agy-model-bridge | this project |
-| --- | --- | --- |
-| Source | Google Antigravity | Claude Desktop (Electron shell of claude.ai) |
-| Credential | OAuth token in macOS Keychain, plaintext JSON | OAuth token in local `config.json`, encrypted with a Keychain key |
-| Upstream | Undocumented `v1internal` Google endpoints | Undocumented application API of claude.ai |
-| Translation cost | High (Anthropic/OpenAI to Google dialect) | Unknown — the inference path is not identified yet |
-
-## Ground rules for this research
-
-- Never print tokens, Keychain values, authorization headers, or decrypted payloads.
-- Never modify, rotate, or refresh local credential caches.
-- Never loop requests to probe the server.
-- Investigation tooling must leave Claude Desktop in its original configuration: read copies
-  of state files, use transient launch flags instead of persistent settings, and restore any
-  change made to enable an observation.
-- Treat internal formats as unspecified details that may change between app versions.
-
-## Layout
-
-- `notion.md` — feasibility investigation, evidence log, and GO/NO-GO decision.
+No package upload or release has been made; no code is intended to run
+against Claude Desktop's internal session without the user's explicit,
+single-request authorization.
